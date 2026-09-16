@@ -1,0 +1,259 @@
+// ==UserScript==
+// @name         Auto-Submit mas bloqueo de captchas
+// @namespace    http://violentmonkey.net/
+// @version      4.0.0
+// @description  Auto-submit - Bloquea números, letras y respuestas malas
+// @author       TuNombre
+// @match        https://kolotibablo.com/*
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @updateURL    https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/kolotibablo-auto.user.js
+// @downloadURL  https://raw.githubusercontent.com/TU_USUARIO/TU_REPO/main/kolotibablo-auto.user.js
+// @homepageURL  https://github.com/TU_USUARIO/TU_REPO
+// @supportURL   https://github.com/TU_USUARIO/TU_REPO/issues
+// ==/UserScript==
+
+(function () {
+    'use strict';
+
+    // Respuestas malas originales
+    const respuestasMalasOriginales = ['empty', 'loh', '6e', '-1', '-2', '-3', '-4', '-5', '-6', '-7', '-8', '-9', '30','an',  '3m', 'x0', 'v6', '1349', '355', '735', 'e7', 'ey', '382', '958', 'v54', '348', '929'];
+    
+    // Generar TODOS los números del 0 al 9
+    const numeros = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+    
+    // Generar TODAS las letras de la A a la Z (mayúsculas y minúsculas)
+    const letras = [];
+    for (let i = 65; i <= 90; i++) {
+        letras.push(String.fromCharCode(i).toLowerCase());
+        letras.push(String.fromCharCode(i).toUpperCase());
+    }
+    
+    // Combinar todo
+    const respuestasMalas = [...new Set([...respuestasMalasOriginales, ...numeros, ...letras])];
+
+    let config = { funcionActiva: true, tiempoEspera: 1 };
+    let timeoutId = null;
+    let textoAnterior = '';
+    let procesando = false;
+
+    console.log(`📋 Total de respuestas bloqueadas: ${respuestasMalas.length}`);
+
+    function esTextoBloqueado(texto) {
+        if (!texto) return false;
+        const textoLower = texto.trim().toLowerCase();
+        
+        // Verificar si es número (0-9)
+        if (/^[0-9]$/.test(textoLower)) {
+            console.log(`🔢 Número bloqueado: "${texto}"`);
+            return true;
+        }
+        
+        // Verificar si es letra (a-z)
+        if (/^[a-z]$/i.test(textoLower)) {
+            console.log(`🔤 Letra bloqueada: "${texto}"`);
+            return true;
+        }
+        
+        // Verificar en lista de respuestas malas
+        if (respuestasMalas.some(p => textoLower === p.toLowerCase())) {
+            console.log(`🚫 Respuesta mala bloqueada: "${texto}"`);
+            return true;
+        }
+        
+        return false;
+    }
+
+    function hacerClickSubmit() {
+        try {
+            // Buscar el botón de submit con diferentes selectores
+            let btn = document.querySelector('.submit-wrap button.btn.btn-default');
+            
+            // Si no lo encuentra, buscar alternativas
+            if (!btn) {
+                btn = document.querySelector('button[type="submit"]');
+            }
+            if (!btn) {
+                btn = document.querySelector('.submit-wrap button');
+            }
+            if (!btn) {
+                btn = document.querySelector('button.btn-default');
+            }
+            
+            if (btn && !btn.disabled) {
+                console.log('✅ Ejecutando submit');
+                btn.click();
+                
+                // Disparar eventos adicionales por si acaso
+                btn.dispatchEvent(new Event('click', { bubbles: true }));
+                btn.dispatchEvent(new Event('mousedown', { bubbles: true }));
+                btn.dispatchEvent(new Event('mouseup', { bubbles: true }));
+                
+                return true;
+            } else {
+                if (btn && btn.disabled) {
+                    console.log('⚠️ Botón deshabilitado');
+                } else {
+                    console.log('❌ Botón no encontrado');
+                }
+                return false;
+            }
+        } catch (e) {
+            console.error('Error en submit:', e);
+            return false;
+        }
+    }
+
+    function manejarDeteccionTexto(event) {
+        if (!config.funcionActiva) return;
+        if (window.KOLO_SYNC?.correctorOcupado) return;
+        if (procesando) return;
+
+        const input = event?.target || document.querySelector('input.inp-dft.w100p');
+        if (!input) return;
+
+        const textoActual = input.value.trim();
+
+        // Si el texto está vacío, resetear
+        if (textoActual === '') {
+            window.__CAPTCHA_BLOQUEADO__ = false;
+            textoAnterior = '';
+            clearTimeout(timeoutId);
+            return;
+        }
+
+        // Bloquear respuestas malas
+        if (esTextoBloqueado(textoActual)) {
+            window.__CAPTCHA_BLOQUEADO__ = true;
+            clearTimeout(timeoutId);
+            textoAnterior = textoActual;
+            return;
+        }
+
+        window.__CAPTCHA_BLOQUEADO__ = false;
+
+        // Si el texto cambió y es válido
+        if (textoActual && textoActual !== textoAnterior) {
+            textoAnterior = textoActual;
+            clearTimeout(timeoutId);
+            
+            // Pequeña espera para que el usuario termine de escribir
+            timeoutId = setTimeout(() => {
+                if (!window.KOLO_SYNC?.correctorOcupado && !procesando) {
+                    procesando = true;
+                    
+                    // Verificar nuevamente que el texto no sea bloqueado
+                    const textoFinal = input.value.trim();
+                    if (!esTextoBloqueado(textoFinal) && textoFinal !== '') {
+                        const submitExitoso = hacerClickSubmit();
+                        
+                        // Si falla el submit, reintentar después de un momento
+                        if (!submitExitoso) {
+                            console.log('🔄 Reintentando submit...');
+                            setTimeout(() => {
+                                hacerClickSubmit();
+                                procesando = false;
+                            }, 500);
+                        } else {
+                            setTimeout(() => {
+                                textoAnterior = '';
+                                procesando = false;
+                            }, 300);
+                        }
+                    } else {
+                        procesando = false;
+                    }
+                } else {
+                    procesando = false;
+                }
+            }, config.tiempoEspera * 1000);
+        }
+    }
+
+    function observarCambiosDOM() {
+        // Observar cambios en el DOM para capturar nuevos inputs
+        const observer = new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+                if (mutation.type === 'childList') {
+                    // Buscar el input
+                    const input = document.querySelector('input.inp-dft.w100p');
+                    if (input && !input.__submitHooked) {
+                        input.__submitHooked = true;
+                        input.addEventListener('input', manejarDeteccionTexto);
+                        input.addEventListener('change', manejarDeteccionTexto);
+                        input.addEventListener('keyup', manejarDeteccionTexto);
+                        console.log('🔄 Input detectado y configurado');
+                    }
+                    
+                    // También buscar el botón si se recarga
+                    const btn = document.querySelector('.submit-wrap button.btn.btn-default');
+                    if (btn && !btn.__btnHooked) {
+                        btn.__btnHooked = true;
+                        console.log('🔄 Botón detectado');
+                    }
+                }
+            }
+        });
+
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true,
+            attributes: false
+        });
+    }
+
+    function init() {
+        console.log('✅ Script Auto-Submit v4.0 iniciado correctamente');
+        console.log(`🔒 Bloqueando: ${respuestasMalas.length} respuestas`);
+        
+        // Configurar el input inicial
+        const input = document.querySelector('input.inp-dft.w100p');
+        if (input) {
+            input.__submitHooked = true;
+            input.addEventListener('input', manejarDeteccionTexto);
+            input.addEventListener('change', manejarDeteccionTexto);
+            input.addEventListener('keyup', manejarDeteccionTexto);
+            console.log('✅ Input inicial configurado');
+        } else {
+            console.log('⏳ Esperando input...');
+        }
+
+        // Iniciar observación del DOM
+        observarCambiosDOM();
+
+        // También intentar submit cuando se presiona Enter
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                const input = document.querySelector('input.inp-dft.w100p');
+                if (input && document.activeElement === input) {
+                    e.preventDefault();
+                    const texto = input.value.trim();
+                    if (texto && !esTextoBloqueado(texto)) {
+                        hacerClickSubmit();
+                    }
+                }
+            }
+        });
+
+        // Reintentar submit si la página cambia
+        setInterval(() => {
+            const input = document.querySelector('input.inp-dft.w100p');
+            if (input && input.value.trim() && !esTextoBloqueado(input.value.trim())) {
+                const btn = document.querySelector('.submit-wrap button.btn.btn-default');
+                if (btn && !btn.disabled) {
+                    // Solo si no está procesando
+                    if (!procesando) {
+                        console.log('🔄 Submit automático de respaldo');
+                        hacerClickSubmit();
+                    }
+                }
+            }
+        }, 3000);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', init);
+    } else {
+        init();
+    }
+})();
